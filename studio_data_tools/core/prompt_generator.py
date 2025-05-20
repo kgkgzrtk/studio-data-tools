@@ -15,72 +15,29 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+# Import prompt data from separate modules
+from studio_data_tools.core.prompts.object_scenes import OBJECT_SCENE_MAP
+from studio_data_tools.core.prompts.general_scenes import (
+    GENERAL_SCENES, DEFAULT_SCENES,
+    ENVIRONMENT_TYPES, LIGHTING_CONDITIONS, SURFACE_TYPES
+)
+from studio_data_tools.core.prompts.templates import (
+    DYNAMIC_SCENE_SYSTEM_INSTRUCTION, DYNAMIC_SCENE_USER_MESSAGE,
+    DIVERSE_SCENE_SYSTEM_INSTRUCTION, DIVERSE_SCENE_USER_MESSAGE,
+    SCENE_INFERENCE_SYSTEM_INSTRUCTION, SCENE_INFERENCE_USER_MESSAGE,
+    REALISTIC_PROMPT_SYSTEM_INSTRUCTION, REALISTIC_PROMPT_USER_MESSAGE,
+    FALLBACK_PROMPT_TEMPLATE, ENHANCED_FALLBACK_PROMPT_TEMPLATE
+)
+
 # Load environment variables
 load_dotenv()
-
-# Object and scene mapping definition
-OBJECT_SCENE_MAP = {
-    "empty can": [
-        "urban street with empty cans on asphalt",
-        "park bench with discarded cans",
-        "grassy field with scattered aluminum cans",
-        "parking lot with empty cans",
-        "beach with washed-up cans",
-        "sidewalk with empty soda cans",
-        "forest floor with discarded cans",
-        "public trash bin overflowing with cans",
-        "roadside ditch with cans",
-        "empty lot with scattered trash and cans"
-    ],
-    "plastic bottle": [
-        "riverbank with plastic bottles",
-        "ocean shore with washed-up plastic bottles",
-        "hiking trail with discarded plastic bottles",
-        "urban street corner with plastic bottles",
-        "public park with plastic bottles",
-        "roadside with plastic bottles",
-        "beach sand with plastic bottles",
-        "recycling bin overflowing with plastic bottles",
-        "forest clearing with plastic bottles",
-        "creek bed with plastic bottles"
-    ],
-    "glass bottle": [
-        "park area with glass bottles",
-        "urban alleyway with glass bottles",
-        "beach with glass bottles in sand",
-        "outdoor tables with empty glass bottles",
-        "indoor countertop with glass bottles"
-    ],
-    "paper cup": [
-        "urban street with discarded paper cups",
-        "park bench with paper cups",
-        "office space with paper cups",
-        "cafe tables with empty paper cups",
-        "parking lot with scattered paper cups"
-    ]
-}
-
-# General scenes for fallback
-GENERAL_SCENES = [
-    "urban street with litter",
-    "outdoor park area",
-    "indoor surface",
-    "parking lot ground",
-    "riverside or beach",
-    "grassy field"
-]
-
-# Sample prompt for LLM examples
-SAMPLE_PROMPT = """
-A photorealistic handheld snapshot of abandoned street litter—crushed silver aluminum cans with visible dents, a red plastic cup, and scattered cigarette butts—lying on a mixed asphalt, concrete, and stone-paved sidewalk beside an ivy-covered brick wall and the mossy edge of a green-algae-filled canal. Soft ambient natural light under an overcast sky or early morning/evening glow. Tilted camera angle with an off-center composition, shallow to moderate depth of field focusing sharply on the litter in the foreground while gently blurring the background. Ultra-high resolution (4K), emphasizing crisp details: metal textures, leaf veins, grout lines, and algae surface. Muted earth-tone color palette (grays, browns, greens) accented by pops of red, blue, and silver. 4:3 aspect ratio.
-"""
 
 
 class PromptGenerator:
     """
     Generates prompts for image generation using LLMs.
     
-    This class provides both hardcoded scene templates and LLM-generated
+    This class provides both predefined scene templates and LLM-generated
     dynamic scene descriptions for image generation.
     """
     
@@ -99,23 +56,170 @@ class PromptGenerator:
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = model
         
-    def get_appropriate_scenes(self, object_name: str) -> List[str]:
+    def get_appropriate_scenes(self, object_name: str, use_llm: bool = False) -> List[str]:
         """
         Get appropriate scenes for a given object.
         
         Args:
             object_name: The name of the object to find scenes for.
+            use_llm: Whether to use LLM for scene generation instead of predefined scenes.
             
         Returns:
             List of scene descriptions appropriate for the object.
         """
-        # Find the closest object key in the mapping
-        for key in OBJECT_SCENE_MAP:
-            if key.lower() in object_name.lower() or object_name.lower() in key.lower():
-                return OBJECT_SCENE_MAP[key]
+        if use_llm and self.client is not None:
+            # Use LLM to generate scenes dynamically
+            try:
+                return self.generate_dynamic_scenes(object_name)
+            except Exception as e:
+                print(f"Error generating scenes with LLM: {e}")
+                print("Falling back to predefined scenes")
+                # Fall back to predefined scenes
+        
+        # Find the closest object key in the mapping using more flexible matching
+        matched_scenes = self._find_matching_scenes(object_name)
+        if matched_scenes:
+            return matched_scenes
         
         # Fall back to general scenes if no match
         return GENERAL_SCENES
+    
+    def _find_matching_scenes(self, object_name: str) -> List[str]:
+        """
+        Find scenes that match the given object name using flexible matching.
+        
+        Args:
+            object_name: The name of the object to find scenes for.
+            
+        Returns:
+            List of matching scene descriptions, or empty list if no match found.
+        """
+        # Convert to lowercase for case-insensitive matching
+        object_name_lower = object_name.lower()
+        
+        # 1. Try exact match first
+        if object_name_lower in OBJECT_SCENE_MAP:
+            return OBJECT_SCENE_MAP[object_name_lower]
+        
+        # 2. Try partial match (object name contains key or key contains object name)
+        for key in OBJECT_SCENE_MAP:
+            key_lower = key.lower()
+            if key_lower in object_name_lower or object_name_lower in key_lower:
+                return OBJECT_SCENE_MAP[key]
+        
+        # 3. Try word-level matching (any word in object name matches any word in key)
+        object_words = set(object_name_lower.split())
+        for key in OBJECT_SCENE_MAP:
+            key_words = set(key.lower().split())
+            if object_words.intersection(key_words):
+                return OBJECT_SCENE_MAP[key]
+        
+        # No match found
+        return []
+    
+    def generate_dynamic_scenes(self, object_name: str, num_scenes: int = 10) -> List[str]:
+        """
+        Generate scenes for an object completely from scratch using LLM without relying on predefined templates.
+        
+        Args:
+            object_name: The object to generate scenes for.
+            num_scenes: Number of scenes to generate.
+            
+        Returns:
+            List of generated scene descriptions.
+        """
+        if self.client is None:
+            raise ValueError("API client is required for dynamic scene generation")
+        
+        # Format the system instruction and user message with the appropriate values
+        system_instruction = DYNAMIC_SCENE_SYSTEM_INSTRUCTION.format(
+            num_scenes=num_scenes,
+            object_name=object_name
+        )
+        
+        user_message = DYNAMIC_SCENE_USER_MESSAGE.format(
+            num_scenes=num_scenes,
+            object_name=object_name
+        )
+        
+        try:
+            # Generate content
+            response = self.client.models.generate_content(
+                model="gemini-1.5-pro",
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.9,  # Higher temperature for more creativity
+                    max_output_tokens=800,
+                    top_p=0.95
+                )
+            )
+            
+            # Process response
+            scene_texts = [line.strip() for line in response.text.split('\n')
+                         if line.strip() and not line.strip().startswith('#')]
+            
+            # Clean up scenes
+            scenes = []
+            
+            for scene in scene_texts:
+                if not scene or scene.isdigit() or scene.startswith('#'):
+                    continue
+                    
+                clean_scene = scene
+                
+                # Remove numbering (e.g., "1. ", "1) ", etc.)
+                if len(clean_scene) > 2 and clean_scene[0].isdigit():
+                    for separator in ['. ', ') ', '- ', ': ']:
+                        if separator in clean_scene[:5]:
+                            clean_scene = clean_scene.split(separator, 1)[1].strip()
+                            break
+                
+                # Add to scenes list if not empty
+                if clean_scene:
+                    scenes.append(clean_scene)
+            
+            # If we don't have enough scenes total, add fallbacks
+            while len(scenes) < num_scenes:
+                scenes.append(self._create_fallback_scene(object_name, len(scenes) + 1))
+            
+            return scenes[:num_scenes]
+            
+        except Exception as e:
+            print(f"Error in dynamic scene generation: {e}")
+            return self._create_default_dynamic_scenes(object_name, num_scenes)
+    
+    def _create_default_dynamic_scenes(self, object_name: str, num_scenes: int) -> List[str]:
+        """Create default scenes when dynamic generation fails."""
+        # Use the default scenes from the imported modules
+        default_scenes = [scene.format(object=object_name) for scene in DEFAULT_SCENES]
+        
+        # シーンの選択
+        result_scenes = default_scenes[:min(num_scenes, len(default_scenes))]
+        
+        # 必要であれば、残りのシーンをバリエーションで埋める
+        while len(result_scenes) < num_scenes:
+            idx = len(result_scenes) % len(default_scenes)
+            base_scene = default_scenes[idx]
+            
+            # 照明バリエーションを追加
+            lighting_vars = ["underexposed", "overexposed", "shadow-filled", "harshly lit",
+                            "unevenly lit", "poorly lit", "backlit", "side-lit"]
+            light_var = lighting_vars[len(result_scenes) % len(lighting_vars)]
+            
+            new_scene = f"{light_var} " + base_scene
+            result_scenes.append(new_scene)
+        
+        return result_scenes[:num_scenes]
+    
+    def _create_fallback_scene(self, object_name: str, index: int) -> str:
+        """Create a single fallback scene when needed to fill out the requested number."""
+        # Use the environment types, lighting conditions, and surface types from the imported modules
+        env_idx = (index * 3) % len(ENVIRONMENT_TYPES)
+        cond_idx = (index * 7) % len(LIGHTING_CONDITIONS)
+        surf_idx = (index * 5) % len(SURFACE_TYPES)
+        
+        return f"{LIGHTING_CONDITIONS[cond_idx]} {ENVIRONMENT_TYPES[env_idx]} with {SURFACE_TYPES[surf_idx]} and {object_name}"
     
     def generate_diverse_scenes(self, object_name: str, num_scenes: int = 10) -> List[str]:
         """
@@ -134,32 +238,22 @@ class PromptGenerator:
         
         # Get example scenes for the prompt
         examples = []
-        for key, scenes in OBJECT_SCENE_MAP.items():
-            if key.lower() in object_name.lower() or object_name.lower() in key.lower():
-                examples = scenes[:3]  # Use up to 3 examples
-                break
+        matched_scenes = self._find_matching_scenes(object_name)
+        if matched_scenes:
+            examples = matched_scenes[:3]  # Use up to 3 examples
         
         examples_text = "\n".join([f"- {ex}" for ex in examples]) if examples else ""
         
-        system_instruction = (
-            "You are an expert location scout for realistic documentary photography. "
-            f"Generate {num_scenes} diverse and realistic locations where discarded {object_name}(s) might be found in everyday environments. "
-            "The locations should vary in terms of urban/rural settings, indoor/outdoor, lighting conditions, and surface types. "
-            "Be specific about the environment, surface material, nearby elements, and lighting. "
-            "Each location description should be 10-15 words and focus on physical setting, not camera settings."
+        # Format the system instruction and user message with the appropriate values
+        system_instruction = DIVERSE_SCENE_SYSTEM_INSTRUCTION.format(
+            num_scenes=num_scenes,
+            object_name=object_name
         )
         
-        user_message = (
-            f"Generate {num_scenes} diverse locations where {object_name}(s) might be found as litter or discarded items. "
-            "Include a mix of:\n"
-            "- Urban environments (streets, sidewalks, parking lots)\n"
-            "- Natural settings (parks, beaches, wooded areas)\n"
-            "- Indoor locations (floors, tables, shelves)\n"
-            "- Different lighting conditions (bright sunlight, overcast, dawn/dusk, indoor lighting)\n"
-            "- Various surface materials (concrete, asphalt, grass, sand, wood, carpet)\n\n"
-            "Some examples of location descriptions:\n"
-            f"{examples_text}\n\n"
-            "Return ONLY a numbered list of location descriptions, each 10-15 words long."
+        user_message = DIVERSE_SCENE_USER_MESSAGE.format(
+            num_scenes=num_scenes,
+            object_name=object_name,
+            examples_text=examples_text
         )
         
         try:
@@ -196,26 +290,16 @@ class PromptGenerator:
             # Fall back to default scenes if generation failed
             if not scenes:
                 print("Warning: Failed to generate scenes with LLM, using default scenes instead.")
-                return [
-                    f"urban street with {object_name}",
-                    f"park area with {object_name}",
-                    f"indoor surface with {object_name}",
-                    f"parking lot with {object_name}",
-                    f"riverside with {object_name}"
-                ]
+                # Use a mix of general scenes with the object name
+                return [f"{scene} with {object_name}" for scene in GENERAL_SCENES]
             
             return scenes
             
         except Exception as e:
             print(f"Error generating scenes with LLM: {e}")
             # Fall back to default scenes on error
-            return [
-                f"urban street with {object_name}",
-                f"park area with {object_name}",
-                f"indoor surface with {object_name}",
-                f"parking lot with {object_name}",
-                f"riverside with {object_name}"
-            ]
+            # Use a mix of general scenes with the object name
+            return [f"{scene} with {object_name}" for scene in GENERAL_SCENES]
     
     def infer_scene(self, object_name: str, num_objects: int = 1) -> str:
         """
@@ -233,46 +317,52 @@ class PromptGenerator:
             appropriate_scenes = self.get_appropriate_scenes(object_name)
             return random.choice(appropriate_scenes)
         
-        # System and user prompts for scene inference
-        system_instruction = (
-            "You are an expert in environmental photography and waste management. "
-            "Create realistic scenarios where litter or recyclable items might naturally be found."
-        )
-        
-        user_message = (
-            f"Suggest a realistic scene description where {num_objects} {object_name}(s) might naturally be found. "
-            "The scene should be described in 5-10 words only, focusing on the location and context. "
-            "Be specific and realistic. Don't use bullet points or numbering. "
-            "Don't include explanations. Reply with only the scene description."
-        )
-        
+        # 動的シーン生成を使用して複数のシーンを生成し、そこからランダムに選択する方式に変更
         try:
-            # Generate the scene with LLM
-            response = self.client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=user_message,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.7,
-                    max_output_tokens=50
-                )
+            # 多様なシーンを生成
+            scenes = self.generate_dynamic_scenes(object_name, num_scenes=10)
+            # ランダムに1つ選択
+            return random.choice(scenes)
+        except Exception as e:
+            print(f"Error generating dynamic scenes: {e}")
+            # フォールバック: より直接的なプロンプト
+            
+            # Format the system instruction and user message with the appropriate values
+            system_instruction = SCENE_INFERENCE_SYSTEM_INSTRUCTION
+            
+            user_message = SCENE_INFERENCE_USER_MESSAGE.format(
+                num_objects=num_objects,
+                object_name=object_name
             )
             
-            # Clean up the response
-            scene = response.text.strip().strip('"\'').replace('\n', ' ')
-            
-            # Fall back to predefined scenes if response is too short or long
-            if len(scene.split()) < 2 or len(scene.split()) > 15:
-                appropriate_scenes = self.get_appropriate_scenes(object_name)
-                scene = random.choice(appropriate_scenes)
+            try:
+                # Generate the scene with LLM
+                response = self.client.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=user_message,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.9,  # Higher temperature for more variety
+                        max_output_tokens=50
+                    )
+                )
                 
-            return scene
-            
-        except Exception as e:
-            print(f"Error inferring scene: {e}")
-            # Fall back to predefined scenes on error
-            appropriate_scenes = self.get_appropriate_scenes(object_name)
-            return random.choice(appropriate_scenes)
+                # Clean up the response
+                scene = response.text.strip().strip('"\'').replace('\n', ' ')
+                
+                # Fall back to predefined scenes if response is too short or long
+                if len(scene.split()) < 2 or len(scene.split()) > 15:
+                    # Use the default dynamic scenes
+                    default_scenes = self._create_default_dynamic_scenes(object_name, 10)
+                    scene = random.choice(default_scenes)
+                    
+                return scene
+                
+            except Exception as e:
+                print(f"Error inferring scene: {e}")
+                # Fall back to predefined scenes on error
+                default_scenes = [scene.format(object=object_name) for scene in DEFAULT_SCENES[:10]]
+                return random.choice(default_scenes)
     
     def generate_realistic_prompt(self, object_name: str, scene_type: str, 
                                  num_objects: Optional[int] = None, 
@@ -294,15 +384,10 @@ class PromptGenerator:
         if self.client is None:
             # Fall back to simple prompt if no API access
             num_objects = num_objects or random.randint(min_objects, max_objects)
-            prompt = (
-                f"An amateurish smartphone photo of {num_objects} {object_name}(s) in a {scene_type}. "
-                f"The {object_name}(s) should look accidentally captured, randomly positioned and strongly off-center. "
-                "Some objects should be partially cut off or awkwardly positioned in the frame. "
-                "Typical flawed raw smartphone shot with bad white balance, noticeable digital noise, inconsistent exposure. "
-                "Visible camera shake, unstable handheld shot with visible tilt, poor composition. "
-                "Unprocessed, with flat colors, weak contrast, and signs of poor lighting conditions. "
-                "Looks like someone quickly took the photo without caring about composition or quality. "
-                "The horizon is noticeably tilted (10-25 degrees), with accidental finger intrusion at the edge of frame possible."
+            prompt = FALLBACK_PROMPT_TEMPLATE.format(
+                num_objects=num_objects,
+                object_name=object_name,
+                scene_type=scene_type
             )
             return {
                 "prompt": prompt,
@@ -315,40 +400,17 @@ class PromptGenerator:
         if num_objects is None:
             num_objects = random.randint(min_objects, max_objects)
         
-        # System instruction for prompt generation
-        system_instruction = (
-            "You are an expert in generating prompts for AI image generators to create AUTHENTIC AMATEUR photographs. "
-            f"Create a prompt for a scene containing {num_objects} {object_name}(s) in this location: '{scene_type}'. "
-            "The prompt must result in an image that looks like a genuine, unprocessed RAW file straight from a basic smartphone camera. "
-            "Include specific details about:\n"
-            "1. BAD AMATEUR PHOTOGRAPHY - technical flaws common in casual phone photos (bad white balance, poor exposure)\n"
-            "2. STRONGLY OFF-CENTER COMPOSITION - objects placed randomly as if accidentally captured, NOT artistically off-center\n"
-            "3. AWKWARD FRAMING - objects may be partially cut off, too small in frame, or poorly spaced\n"
-            "4. INCONSISTENT LIGHTING - unflattering lighting, harsh shadows, mixed light sources, or blown-out areas\n"
-            "5. VISIBLE TECHNICAL FLAWS - digital noise, chromatic aberration, lens flare, over-compression artifacts\n"
-            "6. CAMERA SHAKE - noticeable blur from unstable handheld shooting or subject movement\n"
-            "7. FLAT COLORS AND CONTRAST - lacks post-processing enhancement, looks like untouched RAW file\n\n"
-            "The image must look genuinely amateurish - as if quickly taken by a non-photographer using a basic smartphone camera "
-            "with no understanding of composition or technical settings, yet the objects must still be identifiable."
+        # Format the system instruction and user message with the appropriate values
+        system_instruction = REALISTIC_PROMPT_SYSTEM_INSTRUCTION.format(
+            num_objects=num_objects,
+            object_name=object_name,
+            scene_type=scene_type
         )
         
-        # User message for prompt generation
-        user_message = (
-            f"Create a photo generation prompt for a genuinely amateurish smartphone snapshot showing {num_objects} {object_name}(s) "
-            f"in this location: '{scene_type}'.\n\n"
-            "CRITICAL REQUIREMENTS:\n"
-            f"- The {num_objects} {object_name}(s) must be visible enough for identification, but NOT perfectly captured\n"
-            "- DELIBERATELY BAD PHOTOGRAPHY - simulate the flaws of untouched RAW files from basic smartphone cameras\n"
-            "- AWKWARD FRAMING - objects positioned randomly as if accidentally captured, not artistically composed\n"
-            "- TECHNICAL ISSUES - include multiple realistic technical flaws (noise, bad white balance, focus hunting)\n"
-            "- LIGHTING PROBLEMS - unflattering lighting conditions, inconsistent exposure, blown highlights\n"
-            "- CAMERA SHAKE - visible blur from unstable handheld shooting\n"
-            "- COLOR ISSUES - flat colors, weak contrast, poor white balance typical of unprocessed RAW files\n"
-            "- TILTED HORIZON - between 5-25 degrees off-level as if hastily shot without care\n"
-            "- NO ARTISTIC QUALITIES - absolutely avoid any hint of professional or artistic photography\n\n"
-            "DO NOT use terms like 'photorealistic', 'high quality', 'detailed', 'professional', 'beautiful', or 'stunning'.\n"
-            "Instead, emphasize terms like 'unprocessed', 'amateur', 'casual', 'raw file', 'smartphone camera', 'unstable', 'flawed'.\n\n"
-            "Create a unique prompt that will generate a truly authentic-looking amateur photo that appears to be straight from a smartphone's camera sensor."
+        user_message = REALISTIC_PROMPT_USER_MESSAGE.format(
+            num_objects=num_objects,
+            object_name=object_name,
+            scene_type=scene_type
         )
         
         try:
@@ -372,15 +434,10 @@ class PromptGenerator:
         except Exception as e:
             print(f"Error generating realistic prompt: {e}")
             # Fall back to simple prompt on error
-            prompt = (
-                f"An amateurish smartphone photo of {num_objects} {object_name}(s) in a {scene_type}. "
-                f"The {object_name}(s) should look accidentally captured, randomly positioned and strongly off-center. "
-                "Some objects should be partially cut off or awkwardly positioned in the frame. "
-                "Typical flawed raw smartphone shot with bad white balance, noticeable digital noise, inconsistent exposure. "
-                "Visible camera shake, unstable handheld shot with visible tilt, poor composition. "
-                "Unprocessed, with flat colors, weak contrast, and signs of poor lighting conditions. "
-                "Looks like someone quickly took the photo without caring about composition or quality. "
-                "The horizon is noticeably tilted (10-25 degrees), with accidental finger intrusion at the edge of frame possible."
+            prompt = FALLBACK_PROMPT_TEMPLATE.format(
+                num_objects=num_objects,
+                object_name=object_name,
+                scene_type=scene_type
             )
             return {
                 "prompt": prompt,
@@ -390,7 +447,8 @@ class PromptGenerator:
             }
     
     def generate_simple_prompt(self, object_name: str, scene_type: Optional[str] = None, 
-                              num_objects: Optional[int] = None, use_llm: bool = True) -> Tuple[str, str, int]:
+                              num_objects: Optional[int] = None, use_llm: bool = True,
+                              use_dynamic_scenes: bool = True) -> Tuple[str, str, int]:
         """
         Generate a simple image prompt without using extensive LLM for the prompt itself.
         
@@ -399,6 +457,7 @@ class PromptGenerator:
             scene_type: The scene description (if None, will be inferred).
             num_objects: Number of objects (if None, will be random between 1-3).
             use_llm: Whether to use LLM for scene inference if scene_type is None.
+            use_dynamic_scenes: Whether to use fully dynamic scene generation instead of predefined mappings.
             
         Returns:
             Tuple of (prompt_text, scene, object_count)
@@ -413,49 +472,77 @@ class PromptGenerator:
         # Determine scene
         if scene_type is None:
             if use_llm:
-                # Use LLM to infer an appropriate scene
-                scene_type = self.infer_scene(object_name, num_objects)
+                # デフォルトでは動的シーン生成を使用する
+                try:
+                    # 多様なシーンを生成
+                    dynamic_scenes = self.generate_dynamic_scenes(object_name, num_scenes=10)
+                    
+                    # 生成されたシーンが同じものばかりでないか確認
+                    if len(set(dynamic_scenes)) < 3:  # 少なくとも3種類以上のシーンが必要
+                        print("Warning: Not enough scene variety, regenerating...")
+                        # 予備のシーンセットを生成して結合
+                        extra_scenes = self._create_default_dynamic_scenes(object_name, 5)
+                        dynamic_scenes.extend(extra_scenes)
+                        # 重複を削除
+                        dynamic_scenes = list(set(dynamic_scenes))
+                    
+                    scene_type = random.choice(dynamic_scenes)
+                except Exception as e:
+                    print(f"Error using dynamic scene generation: {e}")
+                    # デフォルトシーンにフォールバック
+                    default_scenes = [scene.format(object=object_name) for scene in DEFAULT_SCENES[:10]]
+                    scene_type = random.choice(default_scenes)
             else:
-                # Use predefined scenes
-                appropriate_scenes = self.get_appropriate_scenes(object_name)
-                scene_type = random.choice(appropriate_scenes)
+                # LLMを使わない場合は、デフォルトシーンを使用
+                default_scenes = [scene.format(object=object_name) for scene in DEFAULT_SCENES[:10]]
+                scene_type = random.choice(default_scenes)
         
-        # Generate a standard prompt
-        prompt = (
-            f"An amateurish smartphone photo of {num_objects} {object_name}(s) in a {scene_type}. "
-            f"The {object_name}(s) should look accidentally captured, randomly positioned and strongly off-center. "
-            "Some objects should be partially cut off or awkwardly positioned in the frame. "
-            "Typical flawed raw smartphone shot with bad white balance, noticeable digital noise, inconsistent exposure. "
-            "Visible camera shake, unstable handheld shot with visible tilt, poor composition. "
-            "Unprocessed, with flat colors, weak contrast, and signs of poor lighting conditions. "
-            "Looks like someone quickly took the photo without caring about composition or quality. "
-            "The horizon is noticeably tilted (10-25 degrees), with accidental finger intrusion at the edge of frame possible."
+        # Generate a standard prompt with worse lighting conditions
+        prompt = ENHANCED_FALLBACK_PROMPT_TEMPLATE.format(
+            num_objects=num_objects,
+            object_name=object_name,
+            scene_type=scene_type
         )
         
         return prompt, scene_type, num_objects
     
-    def generate_simple_prompts(self, object_type: str, count: int = 1) -> List[Dict[str, str]]:
+    def generate_simple_prompts(self, object_type: str, count: int = 1, use_dynamic_scenes: bool = False) -> List[Dict[str, str]]:
         """
-        Generate simple prompts using predefined templates.
+        Generate simple prompts using predefined templates or dynamic generation.
         
         Args:
             object_type: Type of object to generate prompts for (e.g., "empty can")
             count: Number of prompts to generate
+            use_dynamic_scenes: Whether to use dynamic scene generation instead of predefined mappings
             
         Returns:
             List of prompt dictionaries with scene, prompt, and object
         """
-        if object_type not in OBJECT_SCENE_MAP:
-            raise ValueError(f"Unsupported object type: {object_type}. Supported types: {list(OBJECT_SCENE_MAP.keys())}")
+        if not use_dynamic_scenes and object_type not in OBJECT_SCENE_MAP:
+            if use_dynamic_scenes:
+                # When using dynamic scenes, we don't need to validate against OBJECT_SCENE_MAP
+                pass
+            else:
+                raise ValueError(f"Unsupported object type: {object_type}. Supported types: {list(OBJECT_SCENE_MAP.keys())}")
         
-        scenes = OBJECT_SCENE_MAP[object_type]
-        selected_scenes = random.sample(scenes, min(count, len(scenes)))
-        
-        # If we need more scenes than available, cycle through them
-        if count > len(scenes):
+        # Get scenes - either from predefined mappings or dynamically generated
+        if use_dynamic_scenes:
+            try:
+                scenes = self.generate_dynamic_scenes(object_type, num_scenes=count)
+            except Exception as e:
+                print(f"Error in dynamic scene generation: {e}, falling back to predefined scenes")
+                scenes = self.get_appropriate_scenes(object_type, use_llm=False)
+        else:
+            scenes = self.get_appropriate_scenes(object_type, use_llm=False)
+            
+        # If we need more scenes than available and not using dynamic generation, cycle through them
+        if not use_dynamic_scenes and count > len(scenes):
             additional_needed = count - len(scenes)
             additional_scenes = [scenes[i % len(scenes)] for i in range(additional_needed)]
-            selected_scenes.extend(additional_scenes)
+            scenes = scenes + additional_scenes
+            
+        # Ensure we have enough scenes
+        selected_scenes = scenes[:count]
         
         prompts = []
         for scene in selected_scenes:
@@ -470,6 +557,69 @@ class PromptGenerator:
         
         return prompts
     
+    def generate_fully_dynamic_prompts(self, object_type: str, count: int = 1) -> List[Dict]:
+        """
+        Generate prompts completely dynamically for any object type without relying on predefined mappings.
+        
+        This method is useful for objects that are not in the predefined OBJECT_SCENE_MAP.
+        
+        Args:
+            object_type: Any object type to generate prompts for (no restrictions)
+            count: Number of prompts to generate
+            
+        Returns:
+            List of prompt dictionaries with scene, prompt, object, and object_count
+        """
+        if self.client is None:
+            raise ValueError("API client is required for fully dynamic prompt generation")
+            
+        prompts = []
+        
+        try:
+            # 1. Generate diverse scenes dynamically
+            scenes = self.generate_dynamic_scenes(object_type, num_scenes=count)
+            
+            # 2. For each scene, create a prompt
+            for scene in scenes:
+                # Randomly determine object count
+                obj_count = random.randint(1, 3)
+                
+                # Generate a standard prompt template with poor lighting emphasis
+                prompt_text = ENHANCED_FALLBACK_PROMPT_TEMPLATE.format(
+                    num_objects=obj_count,
+                    object_name=object_type,
+                    scene_type=scene
+                )
+                
+                prompts.append({
+                    "scene": scene,
+                    "prompt": prompt_text,
+                    "object": object_type,
+                    "object_count": obj_count
+                })
+                
+        except Exception as e:
+            print(f"Error in fully dynamic prompt generation: {e}")
+            # Create some basic fallback prompts
+            for i in range(count):
+                obj_count = random.randint(1, 3)
+                scene = self._create_fallback_scene(object_type, i)
+                
+                prompt_text = FALLBACK_PROMPT_TEMPLATE.format(
+                    num_objects=obj_count,
+                    object_name=object_type,
+                    scene_type=scene
+                )
+                
+                prompts.append({
+                    "scene": scene,
+                    "prompt": prompt_text,
+                    "object": object_type,
+                    "object_count": obj_count
+                })
+                
+        return prompts
+    
     def generate_llm_prompts(
         self, 
         object_type: str, 
@@ -477,7 +627,8 @@ class PromptGenerator:
         min_objects: int = 1,
         max_objects: int = 5,
         exact_objects: Optional[int] = None,
-        advanced: bool = False
+        advanced: bool = False,
+        use_dynamic_scenes: bool = False
     ) -> List[Dict]:
         """
         Generate prompts using the LLM for creative scene descriptions.
@@ -489,12 +640,115 @@ class PromptGenerator:
             max_objects: Maximum number of objects per scene
             exact_objects: Exact number of objects (overrides min/max)
             advanced: Use advanced prompt techniques
+            use_dynamic_scenes: Whether to use fully dynamic scene generation without relying on predefined mappings
             
         Returns:
             List of prompt dictionaries with scene, prompt, object, and object_count
         """
         prompts = []
         
+        # Check if object type is supported or if using dynamic generation
+        if not use_dynamic_scenes and object_type not in OBJECT_SCENE_MAP:
+            if self.client is None:
+                raise ValueError(f"Unsupported object type: {object_type}. Supported types: {list(OBJECT_SCENE_MAP.keys())}")
+            else:
+                print(f"Warning: {object_type} not in predefined mappings, using full dynamic generation")
+                use_dynamic_scenes = True
+        
+        # If using dynamic scenes, use the fully dynamic generation approach
+        if use_dynamic_scenes:
+            try:
+                # Generate scenes dynamically
+                scenes = self.generate_dynamic_scenes(object_type, num_scenes=count)
+                
+                # For each scene, customize the object count and generate a prompt
+                for i in range(count):
+                    scene_idx = i % len(scenes)  # Cycle through scenes if needed
+                    scene = scenes[scene_idx]
+                    
+                    # Determine object count
+                    if exact_objects is not None:
+                        obj_count = exact_objects
+                    else:
+                        obj_count = random.randint(min_objects, max_objects)
+                    
+                    # Choose a system instruction based on advanced mode
+                    if advanced:
+                        system_instruction = (
+                            f"You are an expert photographer describing scenes with {obj_count} {object_type}(s) in various environments. "
+                            f"Create a brief, vivid description of a scene containing {obj_count} {object_type}(s) in this setting: '{scene}'. "
+                            f"Make it specific and visually interesting. "
+                            f"Focus on lighting, environment, and composition. "
+                            f"Your descriptions should be suitable for generating photorealistic images. "
+                            f"Keep your response to 1-2 sentences only describing the scene. "
+                            f"DO NOT write 'a photo of' or 'a picture of' - just describe the scene itself."
+                        )
+                    else:
+                        system_instruction = (
+                            f"Describe a realistic scene containing {obj_count} {object_type}(s) in this setting: '{scene}'. "
+                            f"Keep your response to 1-2 sentences only describing the scene. "
+                            f"DO NOT write 'a photo of' or 'a picture of' - just describe the scene itself."
+                        )
+                    
+                    # Call the LLM to generate the prompt or use a fallback
+                    try:
+                        response = self.client.models.generate_content(
+                            model=self.model_name,
+                            contents="Generate a scene description.",
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                temperature=0.7,
+                                max_output_tokens=100,
+                                top_p=0.95,
+                                top_k=40
+                            )
+                        )
+                        
+                        # Get the generated scene
+                        scene_desc = response.text.strip()
+                        
+                        # Construct the final prompt with instructions for the image model
+                        if advanced:
+                            prompt_text = (
+                                f"{scene_desc}. "
+                                f"Amateur smartphone photo, unprocessed RAW quality, unstable handheld shot, "
+                                f"random composition with poor framing, visible digital noise, flat colors, "
+                                f"mild motion blur, and uneven lighting with bad white balance."
+                            )
+                        else:
+                            prompt_text = f"Casual amateur snapshot of {scene_desc}. Unprocessed, smartphone quality with technical imperfections."
+                        
+                        prompts.append({
+                            "scene": scene,
+                            "scene_description": scene_desc,
+                            "prompt": prompt_text,
+                            "object": object_type,
+                            "object_count": obj_count
+                        })
+                        
+                    except Exception as e:
+                        print(f"Error generating LLM prompt: {e}")
+                        # Use fallback template
+                        prompt_text = FALLBACK_PROMPT_TEMPLATE.format(
+                            num_objects=obj_count,
+                            object_name=object_type,
+                            scene_type=scene
+                        )
+                        
+                        prompts.append({
+                            "scene": scene,
+                            "prompt": prompt_text,
+                            "object": object_type,
+                            "object_count": obj_count
+                        })
+                        
+                return prompts
+                
+            except Exception as e:
+                print(f"Error in dynamic scene generation: {e}, falling back to original method")
+                # Fall through to the original method if dynamic generation fails
+        
+        # Original method (non-dynamic) using predefined object mappings
         # Determine the object count description
         if exact_objects is not None:
             objects_desc = f"exactly {exact_objects}"

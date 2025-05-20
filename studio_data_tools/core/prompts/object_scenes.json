@@ -1,0 +1,40 @@
+{
+  "empty can": [
+    "urban street with empty cans on asphalt",
+    "park bench with discarded cans",
+    "grassy field with scattered aluminum cans",
+    "parking lot with empty cans",
+    "beach with washed-up cans",
+    "sidewalk with empty soda cans",
+    "forest floor with discarded cans",
+    "public trash bin overflowing with cans",
+    "roadside ditch with cans",
+    "empty lot with scattered trash and cans"
+  ],
+  "plastic bottle": [
+    "riverbank with plastic bottles",
+    "ocean shore with washed-up plastic bottles",
+    "hiking trail with discarded plastic bottles",
+    "urban street corner with plastic bottles",
+    "public park with plastic bottles",
+    "roadside with plastic bottles",
+    "beach sand with plastic bottles",
+    "recycling bin overflowing with plastic bottles",
+    "forest clearing with plastic bottles",
+    "creek bed with plastic bottles"
+  ],
+  "glass bottle": [
+    "park area with glass bottles",
+    "urban alleyway with glass bottles",
+    "beach with glass bottles in sand",
+    "outdoor tables with empty glass bottles",
+    "indoor countertop with glass bottles"
+  ],
+  "paper cup": [
+    "urban street with discarded paper cups",
+    "park bench with paper cups",
+    "office space with paper cups",
+    "cafe tables with empty paper cups",
+    "parking lot with scattered paper cups"
+  ]
+}

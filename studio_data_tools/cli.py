@@ -52,6 +52,9 @@ def generate_images(args) -> None:
     # List to store prompt data
     prompt_data_list = []
     
+    # 常に動的シーン生成を使用する
+    use_dynamic_scenes = True
+    
     # Generate prompts
     for i in range(args.count):
         # Generate a random number of objects per image unless specified
@@ -77,15 +80,22 @@ def generate_images(args) -> None:
             prompt_data['object'] = args.object
             prompt_data_list.append(prompt_data)
             
-            print(f"[{i+1}/{args.count}] Generated realistic prompt for scene: {prompt_data['scene']}")
+            # 屋内/屋外の分類を判定して表示
+            scene_location = "INDOOR" if any(indoor_term in prompt_data['scene'].lower() for indoor_term in 
+                                           ["kitchen", "bathroom", "office", "bedroom", "living room", 
+                                            "restaurant", "hotel", "shop", "store", "room", "indoor", 
+                                            "shelf", "counter", "desk", "cabinet", "hallway", "lobby"]) else "OUTDOOR"
+            
+            print(f"[{i+1}/{args.count}] Generated realistic prompt for scene [{scene_location}]: {prompt_data['scene']}")
             
         else:
-            # Use simple prompt generation
+            # Use simple prompt generation with dynamic scenes
             prompt, scene, actual_num_objects = prompt_gen.generate_simple_prompt(
                 args.object,
                 scene_type,
                 num_objects,
-                args.use_llm
+                args.use_llm,
+                use_dynamic_scenes
             )
             
             prompt_data = {
@@ -96,7 +106,13 @@ def generate_images(args) -> None:
             }
             prompt_data_list.append(prompt_data)
             
-            print(f"[{i+1}/{args.count}] Generated simple prompt for scene: {scene}")
+            # 屋内/屋外の分類を判定して表示
+            scene_location = "INDOOR" if any(indoor_term in scene.lower() for indoor_term in 
+                                           ["kitchen", "bathroom", "office", "bedroom", "living room", 
+                                            "restaurant", "hotel", "shop", "store", "room", "indoor", 
+                                            "shelf", "counter", "desk", "cabinet", "hallway", "lobby"]) else "OUTDOOR"
+            
+            print(f"[{i+1}/{args.count}] Generated simple prompt for scene [{scene_location}]: {scene}")
     
     # Generate and save images
     generated_info = image_gen.generate_and_save_images(

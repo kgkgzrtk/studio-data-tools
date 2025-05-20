@@ -43,6 +43,9 @@ Cam0/
 archive/
 test_run/
 
+# zip files
+*.zip
+
 # Log files
 *.log
 

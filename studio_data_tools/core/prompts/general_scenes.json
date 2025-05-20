@@ -1,0 +1,32 @@
+{
+  "general_scenes": [
+    "urban street with litter",
+    "outdoor park area",
+    "indoor surface",
+    "parking lot ground",
+    "riverside or beach",
+    "grassy field"
+  ],
+  "default_indoor_scenes": [
+    "dimly lit kitchen counter with {object}",
+    "dark bathroom corner with flickering light and {object}",
+    "shadowy office desk with harsh fluorescent light and {object}",
+    "poorly lit bedroom with {object} on nightstand",
+    "basement storage room with single bulb lighting and {object}",
+    "apartment hallway with burnt-out lights and {object}",
+    "dusty attic with light through small window and {object}",
+    "school classroom with harsh overhead lighting and {object}",
+    "restaurant booth with moody colored lighting and {object}",
+    "hotel room with uneven lamp lighting and {object}"
+  ],
+  "default_outdoor_scenes": [
+    "urban street at dusk with harsh streetlight and {object}",
+    "park bench in deep shadow under trees with {object}",
+    "parking lot with partial security lighting and {object}",
+    "beach at sunset with rapidly fading light and {object}",
+    "backyard with motion-sensor floodlight and {object}",
+    "bus stop with flickering overhead light and {object}",
+    "alleyway with single distant light source and {object}",
+    "highway underpass with patchy lighting and {object}"
+  ]
+}
